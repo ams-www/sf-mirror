@@ -32,7 +32,7 @@ jobs:
           # -p (--page-requisites): 画像・CSS・JSなど表示に必要な素材もすべて取得
           # -np (--no-parent): 親ディレクトリへ遡らない
           wget \
-            -m -nH -p -np \
+            -m -nH -p -np -nv \
             --domains=silver-forest.net,www.silver-forest.net \
             --wait=1 \
             --random-wait \
