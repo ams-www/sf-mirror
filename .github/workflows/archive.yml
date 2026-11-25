@@ -33,9 +33,8 @@ jobs:
           # -np (--no-parent): 親ディレクトリへ遡らない
           wget \
             -m -nH -p -np -nv \
-            --domains=www.silver-forest.net \
-            --wait=1 \
-            --random-wait \
+            --domains=silver-forest.net,www.silver-forest.net \
+            --wait=0.2 \
             --tries=3 \
             --waitretry=3 \
             --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
