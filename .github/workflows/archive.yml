@@ -20,17 +20,17 @@ jobs:
         run: |
           mkdir -p mirror
           
+          # トップページとCSV内の www.silver-forest.net のURLを抽出
           echo "http://www.silver-forest.net/" > seed_urls.txt
           if [ -f "urls.csv" ]; then
-            grep -oE 'https?://(www\.)?silver-forest\.net[^,"'\''[:space:]]*' urls.csv >> seed_urls.txt || true
+            grep -oE 'https?://www\.silver-forest\.net[^,"'\''[:space:]]*' urls.csv >> seed_urls.txt || true
           fi
           sort -u seed_urls.txt -o seed_urls.txt
 
-          # 終了コードを受け取るため一時的に set +e にする
           set +e
           timeout 348m wget \
             -m -nH -p -np -nv \
-            --domains=silver-forest.net,www.silver-forest.net \
+            --domains=www.silver-forest.net \
             --wait=0.2 \
             --tries=3 \
             --waitretry=3 \
@@ -42,7 +42,7 @@ jobs:
             -i seed_urls.txt
           EXIT_CODE=$?
           set -e
-
+          
           # 1. タイムアウト(124)で強制打ち切りされた場合、書き込み途中だった最新ファイルを削除
           if [ $EXIT_CODE -eq 124 ]; then
             echo "Timeout reached. Removing potentially incomplete latest file..."
