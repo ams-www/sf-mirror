@@ -6,18 +6,28 @@ BIN_DIR="/tmp/bin"
 mkdir -p "$BIN_DIR"
 export PATH="$BIN_DIR:$PATH"
 
-# ffmpeg (静的ビルド) が無ければ取得
+ARCH=$(uname -m)
+
+# ffmpeg (GitHub BtbN 静的ビルド)
 if ! command -v ffmpeg >/dev/null 2>&1; then
-  echo "Downloading static ffmpeg..."
-  curl -sL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
-    | tar -xJ -C "$BIN_DIR" --strip-components=1 --wildcards '*/ffmpeg'
+  echo "Downloading static ffmpeg ($ARCH)..."
+  if [ "$ARCH" = "aarch64" ]; then
+    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz"
+  else
+    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+  fi
+  curl -fSL "$FFMPEG_URL" | tar -xJ -C "$BIN_DIR" --strip-components=2 --wildcards '*/bin/ffmpeg'
 fi
 
-# cwebp (libwebp) が無ければ取得
+# cwebp (Google公式 libwebp)
 if ! command -v cwebp >/dev/null 2>&1; then
-  echo "Downloading static cwebp..."
-  curl -sL https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.4.0-linux-x86-64.tar.gz \
-    | tar -xz -C "$BIN_DIR" --strip-components=2 --wildcards '*/bin/cwebp'
+  echo "Downloading static cwebp ($ARCH)..."
+  if [ "$ARCH" = "aarch64" ]; then
+    WEBP_URL="https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.4.0-linux-aarch64.tar.gz"
+  else
+    WEBP_URL="https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.4.0-linux-x86-64.tar.gz"
+  fi
+  curl -fSL "$WEBP_URL" | tar -xz -C "$BIN_DIR" --strip-components=2 --wildcards '*/bin/cwebp'
 fi
 
 echo "=== 2. HTMLの Shift_JIS -> UTF-8 変換 ==="
@@ -32,7 +42,6 @@ done
 
 echo "=== 3. 画像の WebP 変換 ==="
 find mirror -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" \) | while IFS= read -r img; do
-  # アニメーションGIFを壊さないよう、GIFは ffmpeg、静止画は cwebp で変換
   if [[ "${img,,}" == *.gif ]]; then
     ffmpeg -nostdin -loglevel error -i "$img" -c:v libwebp -lossless 0 -q:v 80 -loop 0 "${img}.webp"
   else
