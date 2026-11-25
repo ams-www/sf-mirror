@@ -1,0 +1,58 @@
+name: Archive Silver Forest Static Site
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 1 * *'
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Extract URLs from CSV and Mirror Static Site
+        run: |
+          mkdir -p mirror
+          
+          # トップページとCSV内の対象URLを抽出
+          echo "http://www.silver-forest.net/" > seed_urls.txt
+          if [ -f "urls.csv" ]; then
+            grep -oE 'https?://(www\.)?silver-forest\.net[^,"'\''[:space:]]*' urls.csv >> seed_urls.txt || true
+          fi
+          sort -u seed_urls.txt -o seed_urls.txt
+
+          # 静的サイト向けの純粋ミラーリング
+          # -m (--mirror): 再帰・無限階層・タイムスタンプ比較（更新分だけ再取得）
+          # -nH (--no-host-directories): ドメイン名フォルダを作らず直下に展開
+          # -p (--page-requisites): 画像・CSS・JSなど表示に必要な素材もすべて取得
+          # -np (--no-parent): 親ディレクトリへ遡らない
+          wget \
+            -m -nH -p -np \
+            --domains=silver-forest.net,www.silver-forest.net \
+            --wait=1 \
+            --random-wait \
+            --tries=3 \
+            --waitretry=3 \
+            --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
+            -e robots=off \
+            -P mirror \
+            -i seed_urls.txt || true
+            
+          rm -f seed_urls.txt
+
+      - name: Commit and Push archived files
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add mirror/
+          if ! git diff --cached --quiet; then
+            git commit -m "Update static site archive ($(date +'%Y-%m-%d'))"
+            git push
+          else
+            echo "No changes detected."
+          fi
