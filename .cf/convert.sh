@@ -95,3 +95,14 @@ find mirror -type f \( -iname "*.htm" -o -iname "*.html" \) | while IFS= read -r
     s/<script\b[^>]*\bsrc=["\x27][^"\x27]*(?:zouri\.jp|jakou\.com|yu-yake\.com|shinobi\.jp|yimg\.jp\/images\/analytics)[^"\x27]*["\x27][^>]*>.*?<\/script>(?:\s*<noscript\b[^>]*>.*?<\/noscript>)?//gis;
   ' "$html"
 done
+
+echo "====== HTTPS混在コンテンツの最小修正 ======"
+find mirror -type f \\( -iname "*.htm" -o -iname "*.html" -o -iname "*.css" \\) | while IFS= read -r doc; do
+  perl -0777 -i -pe '
+    # ミラー対象ドメインは外部HTTPSへ出さず、Pages内の同じパスを参照する
+    s#https?://(?:www\\.)?silver-forest\\.net/#/#gi;
+
+    # ニコニコ動画の旧HTTP埋め込みURLをHTTPS版へ変更
+    s#http://ext\\.nicovideo\\.jp/thumb/#https://ext.nicovideo.jp/thumb/#gi;
+  ' "$doc"
+done
