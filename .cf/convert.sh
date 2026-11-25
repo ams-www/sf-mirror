@@ -43,10 +43,19 @@ done
 echo "=== 3. 画像の WebP 変換 ==="
 find mirror -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" \) | while IFS= read -r img; do
   if [[ "${img,,}" == *.gif ]]; then
-    ffmpeg -nostdin -loglevel error -i "$img" -c:v libwebp -lossless 0 -q:v 80 -loop 0 "${img}.webp"
+    ffmpeg -nostdin -loglevel error -i "$img" \
+      -c:v libwebp -lossless 0 -q:v 80 -loop 0 "${img}.webp"
+
+  elif [[ "${img,,}" == *.jpg || "${img,,}" == *.jpeg ]]; then
+    ffmpeg -nostdin -loglevel error -i "$img" \
+      -frames:v 1 -pix_fmt rgb24 \
+      -f image2pipe -vcodec png - \
+      | cwebp -quiet -q 85 -o "${img}.webp" -
+
   else
     cwebp -quiet -q 85 "$img" -o "${img}.webp"
   fi
+
   rm -f "$img"
 done
 
