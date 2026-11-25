@@ -33,7 +33,7 @@ jobs:
           # -np (--no-parent): 親ディレクトリへ遡らない
           wget \
             -m -nH -p -np -nv \
-            --domains=silver-forest.net,www.silver-forest.net \
+            --domains=www.silver-forest.net \
             --wait=1 \
             --random-wait \
             --tries=3 \
