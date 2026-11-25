@@ -16,49 +16,83 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract URLs from CSV and Mirror Static Site
+      - name: Install wget2
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wget2
+
+      - name: Benchmark Server Speed & Mirror Static Site
         run: |
           mkdir -p mirror
-          
-          # トップページとCSV内の www.silver-forest.net のURLを抽出（/lyrics/ 配下は除外）
+
+          # 1. sfb3.htm (約11KB) と arts6.jpg (約433KB) を使って実測ベンチマーク
+          echo "=== Benchmarking www.silver-forest.net ==="
+          START_MS=$(date +%s%3N)
+          # 4並列でテスト取得（HTTPステータスと所要時間を計測）
+          STATUS_HTML=$(curl -s -o /dev/null -w "%{http_code}" "http://www.silver-forest.net/sfb3.htm")
+          SPEED_IMG=$(curl -s -o /dev/null -w "%{speed_download}" "http://www.silver-forest.net/image/arts6.jpg")
+          END_MS=$(date +%s%3N)
+          ELAPSED_MS=$((END_MS - START_MS))
+
+          echo "HTML Status: ${STATUS_HTML}, Image Speed: ${SPEED_IMG} B/s, Total Time: ${ELAPSED_MS} ms"
+
+          # 2. 計測結果から最適な並列数とウェイトを自動決定
+          if [ "$STATUS_HTML" != "200" ]; then
+            echo "Warning: Server returned ${STATUS_HTML}. Falling back to ultra-safe mode."
+            THREADS=1
+            WAIT_TIME=1.0
+          elif [ "$ELAPSED_MS" -lt 800 ]; then
+            echo "Result: Fast response (< 800ms). Using 6 threads."
+            THREADS=6
+            WAIT_TIME=0.05
+          elif [ "$ELAPSED_MS" -lt 2000 ]; then
+            echo "Result: Moderate response (< 2000ms). Using 4 threads."
+            THREADS=4
+            WAIT_TIME=0.1
+          else
+            echo "Result: Slow response (>= 2000ms). Using 2 threads."
+            THREADS=2
+            WAIT_TIME=0.3
+          fi
+
+          # 3. シードURL抽出（/lyrics/ を除外）
           echo "http://www.silver-forest.net/" > seed_urls.txt
           if [ -f "urls.csv" ]; then
             grep -oE 'https?://www\.silver-forest\.net[^,"'\''[:space:]]*' urls.csv | grep -v '/lyrics/' >> seed_urls.txt || true
           fi
           sort -u seed_urls.txt -o seed_urls.txt
 
+          # 4. wget2 で並列ミラーリング実行（--progress=none でログを1行ずつ簡略化）
           set +e
-          timeout 348m wget \
-            -m -nH -p -np -nv \
+          timeout 348m wget2 \
+            --mirror \
+            --no-host-directories \
+            --page-requisites \
+            --no-parent \
             --domains=www.silver-forest.net \
             --exclude-directories=/lyrics \
             --reject-regex='^https?://www\.silver-forest\.net/lyrics(/|$)' \
-            --wait=0.2 \
+            --max-threads=${THREADS} \
+            --wait=${WAIT_TIME} \
             --tries=3 \
             --waitretry=3 \
             --timeout=30 \
             --read-timeout=30 \
             --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
-            -e robots=off \
+            --robots=off \
+            --progress=none \
             -P mirror \
             -i seed_urls.txt
           EXIT_CODE=$?
           set -e
 
-          # タイムアウト強制終了時、書き込み途中だった最新ファイルを削除
+          # 5. タイムアウト強制終了時の不完全ファイル削除＆0バイトファイル掃除
           if [ $EXIT_CODE -eq 124 ]; then
-            echo "Timeout reached. Removing potentially incomplete latest file..."
-            LATEST_FILE=$(find mirror -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -f2- -d" ")
-            if [ -n "$LATEST_FILE" ]; then
-              echo "Deleted incomplete file: $LATEST_FILE"
-              rm -f "$LATEST_FILE"
-            fi
+            echo "Timeout reached. Removing potentially incomplete latest files..."
+            find mirror -type f -mmin -1 -delete
           fi
-
-          # 0バイトの空ファイルおよび万が一取得された lyrics ディレクトリを削除
           find mirror -type f -empty -delete
           rm -rf mirror/lyrics
-
           rm -f seed_urls.txt
 
       - name: Commit and Push archived files
