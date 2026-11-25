@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 
+echo "======変換システムを開始します======"
 echo "=== 1. 変換ツールの準備 (ffmpeg / cwebp) ==="
 BIN_DIR="/tmp/bin"
 mkdir -p "$BIN_DIR"
@@ -78,7 +79,7 @@ done
 
 echo "=== 変換完了！ ==="
 
-echo "=== 3. 古いアクセス解析・カウンタートラッカーの削除 ==="
+echo "======古いアクセス解析・カウンタートラッカーの削除======"
 find mirror -type f \( -iname "*.htm" -o -iname "*.html" \) | while IFS= read -r html; do
   perl -0777 -i -pe '
     # 1. 忍者系・NINJA ANALYZE のコメントブロックを削除（■付きや空白ゆれにも対応）
