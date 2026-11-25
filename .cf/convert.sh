@@ -77,3 +77,20 @@ find mirror -type f \( -iname "*.htm" -o -iname "*.html" -o -iname "*.css" \) | 
 done
 
 echo "=== 変換完了！ ==="
+
+echo "=== 3. 古いアクセス解析・カウンタートラッカーの削除 ==="
+find mirror -type f \( -iname "*.htm" -o -iname "*.html" \) | while IFS= read -r html; do
+  perl -0777 -i -pe '
+    # 1. 忍者系・NINJA ANALYZE のコメントブロックを削除（■付きや空白ゆれにも対応）
+    s/<!--[\s■]*shinobi ct2\s*-->.*?<!--[\s■]*\/shinobi ct2\s*-->//gis;
+    s/<!--[\s■]*shinobi1\s*-->.*?<!--[\s■]*shinobi2\s*-->//gis;
+    s/<!--[\s■]*NINJA ANALYZE\s*-->.*?<!--[\s■]*\/NINJA ANALYZE\s*-->//gis;
+    s/<!--[\s■]*忍び(?:カウンター|アクセス解析)\s*-->\s*(?:<script\b[^>]*>.*?<\/script>\s*(?:<noscript\b[^>]*>.*?<\/noscript>\s*)?)?//gis;
+
+    # 2. Yahoo!アクセス解析ブロックを削除
+    s/<!--[\s■]*Yahoo!アクセス解析\s*-->.*?<\/noscript>//gis;
+
+    # 3. 対象ドメインの <script> と、それに続く <noscript> をまとめて削除（改行・空白ゆれ対応）
+    s/<script\b[^>]*\bsrc=["\x27][^"\x27]*(?:zouri\.jp|jakou\.com|yu-yake\.com|shinobi\.jp|yimg\.jp\/images\/analytics)[^"\x27]*["\x27][^>]*>.*?<\/script>(?:\s*<noscript\b[^>]*>.*?<\/noscript>)?//gis;
+  ' "$html"
+done
