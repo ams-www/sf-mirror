@@ -1,0 +1,6 @@
+Disallow: /top.htm
+
+Disallow: /black.htm
+
+Disallow: /cherry.htm
+

@@ -1,0 +1,90 @@
+@charset "Shift_JIS";
+
+
+
+body	{
+
+	margin-top: 0px;
+
+	margin-bottom: 0px;
+
+	margin: 0px 0px 0px 0px;
+
+	background-color: #FFAACC;
+
+	text-align: center;
+
+	font-size: 11pt;
+
+	color: #FFFFFF;
+
+	scrollbar-arrow-color :red;
+
+	scrollbar-base-color : white;
+
+	scrollbar-face-color : white;
+
+	scrollbar-highlight-color : white;
+
+	scrollbar-3dlight-color : red;
+
+	scrollbar-shadow-color : red;
+
+	scrollbar-darkshadow-color : white;
+
+	}
+
+
+
+a:text	{
+
+	color: #FFFFFF;
+
+	text-decoration: none;
+
+	}
+
+
+
+a:link	{
+
+	color: #FFFFFF;
+
+	text-decoration: none;
+
+	}
+
+
+
+a:visited	{
+
+	color: #FFFFFF;
+
+	text-decoration: none;
+
+	}
+
+
+
+TH	{
+
+	font-size: 11pt;
+
+	}
+
+
+
+TD	{
+
+	font-size: 11pt;
+
+	}
+
+
+
+H1	{
+
+	font-size: 13pt;
+
+	}
+
