@@ -46,11 +46,14 @@ find mirror -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -i
     ffmpeg -nostdin -loglevel error -i "$img" \
       -c:v libwebp -lossless 0 -q:v 80 -loop 0 "${img}.webp"
 
-  elif [[ "${img,,}" == *.jpg || "${img,,}" == *.jpeg ]]; then
-    ffmpeg -nostdin -loglevel error -i "$img" \
-      -frames:v 1 -pix_fmt rgb24 \
-      -f image2pipe -vcodec png - \
-      | cwebp -quiet -q 85 -o "${img}.webp" -
+elif [[ "${img,,}" == *.jpg || "${img,,}" == *.jpeg ]]; then
+  tmp_png="${img}.tmp.png"
+
+  ffmpeg -nostdin -loglevel error -y -i "$img" \
+    -frames:v 1 -pix_fmt rgb24 "$tmp_png"
+
+  cwebp -quiet -q 85 "$tmp_png" -o "${img}.webp"
+  rm -f "$tmp_png"
 
   else
     cwebp -quiet -q 85 "$img" -o "${img}.webp"
