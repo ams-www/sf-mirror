@@ -68,28 +68,55 @@ echo "=== 3. 画像の WebP 変換 ==="
 do_img() {
   local img="$1"
   local lower="${img,,}"
+  local ok=0
+
   case "$lower" in
     *.gif)
       if [ "${HAS_GIF2WEBP:-0}" = "1" ]; then
-        gif2webp -quiet -q 80 "$img" -o "${img}.webp" && rm -f "$img"
-      else
+        gif2webp -quiet -q 80 "$img" -o "${img}.webp" 2>/dev/null && ok=1
+      fi
+      if [ "$ok" = 0 ]; then
         ffmpeg -nostdin -loglevel error -i "$img" \
-          -c:v libwebp -lossless 0 -q:v 80 -loop 0 "${img}.webp" && rm -f "$img"
+          -c:v libwebp -lossless 0 -q:v 80 -loop 0 "${img}.webp" 2>/dev/null && ok=1
       fi
       ;;
+
     *.jpg|*.jpeg)
-      # ffmpeg→PNG 経由を廃止（cwebpはJPEGを直接読める）
-      cwebp -quiet -q 85 "$img" -o "${img}.webp" && rm -f "$img"
+      # 1st try: cwebp 直接（RGB JPEG はこれで最速）
+      if cwebp -quiet -q 85 "$img" -o "${img}.webp" 2>/dev/null; then
+        ok=1
+      else
+        # CMYK / YCCK / 特殊色空間の JPEG は ffmpeg で RGB 化してから cwebp
+        echo "[fallback:ffmpeg] $img"
+        local tmp_png="${img}.tmp.png"
+        if ffmpeg -nostdin -loglevel error -y -i "$img" \
+             -frames:v 1 -pix_fmt rgb24 "$tmp_png" 2>/dev/null \
+           && cwebp -quiet -q 85 "$tmp_png" -o "${img}.webp" 2>/dev/null; then
+          ok=1
+        fi
+        rm -f "$tmp_png"
+      fi
       ;;
+
     *)
-      cwebp -quiet -q 85 "$img" -o "${img}.webp" && rm -f "$img"
+      # PNG はそのまま cwebp（iCCP 警告は 2>/dev/null で抑制）
+      cwebp -quiet -q 85 "$img" -o "${img}.webp" 2>/dev/null && ok=1
       ;;
   esac
+
+  if [ "$ok" = 1 ]; then
+    rm -f "$img"
+  else
+    echo "[WARN] 変換失敗、元ファイル保持: $img" >&2
+    # ★重要★ exit 255 で xargs 全体が abort するのを防ぐため必ず 0 を返す
+  fi
+  return 0
 }
 export -f do_img
 find mirror -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" \) -print0 \
   | xargs -0 -r -P "$JOBS" -n 1 bash -c 'do_img "$1"' _
 
+  
 # ---------- 4. 音声 → WebM ----------
 echo "=== 4. 音声 (WAV / MP3) の WebM (Opus) 変換 ==="
 do_audio() {
