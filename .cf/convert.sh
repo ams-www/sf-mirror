@@ -119,14 +119,41 @@ find mirror -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -i
   
 # ---------- 4. 音声 → WebM ----------
 echo "=== 4. 音声 (WAV / MP3) の WebM (Opus) 変換 ==="
+
+# 音声専用の並列数（未指定なら nproc の2倍。ただし上限8）
+NPROC="$(nproc 2>/dev/null || echo 4)"
+JOBS_AUDIO="${JOBS_AUDIO:-$(( NPROC * 2 > 8 ? 8 : NPROC * 2 ))}"
+
+# 変換設定（品質を下げたくなければ 96k / compression_level 10 のまま）
+OPUS_BITRATE="${OPUS_BITRATE:-96k}"
+OPUS_LEVEL="${OPUS_LEVEL:-10}"   # 0(速い)〜10(高圧縮・遅い)
+
+AUDIO_COUNT=$(find mirror -type f \( -iname "*.wav" -o -iname "*.mp3" \) | wc -l)
+echo "[audio] files=$AUDIO_COUNT, jobs=$JOBS_AUDIO, bitrate=$OPUS_BITRATE, level=$OPUS_LEVEL"
+
 do_audio() {
   local audio="$1"
-  ffmpeg -nostdin -loglevel error -i "$audio" \
-    -c:a libopus -b:a 96k -vn "${audio}.webm" && rm -f "$audio"
+  if ffmpeg -nostdin -loglevel error -y -i "$audio" \
+       -c:a libopus -b:a "$OPUS_BITRATE" -compression_level "$OPUS_LEVEL" \
+       -vn "${audio}.webm" 2>/dev/null; then
+    rm -f "$audio"
+  else
+    echo "[WARN] audio conversion failed, keeping source: $audio" >&2
+    rm -f "${audio}.webm"   # 中途半端な出力は消す
+  fi
+  return 0   # ★ exit 255 で xargs 全体を abort させない
 }
 export -f do_audio
-find mirror -type f \( -iname "*.wav" -o -iname "*.mp3" \) -print0 \
-  | xargs -0 -r -P "$JOBS" -n 1 bash -c 'do_audio "$1"' _
+export OPUS_BITRATE OPUS_LEVEL
+
+# ★ 大きいファイルから先に処理する（最後に1個巨大ファイルが残るのを防ぐ）
+TS=$(date +%s)
+find mirror -type f \( -iname "*.wav" -o -iname "*.mp3" \) -printf '%s\t%p\0' \
+  | sort -z -rn \
+  | cut -z -f2- \
+  | xargs -0 -r -P "$JOBS_AUDIO" -n 1 bash -c 'do_audio "$1"' _
+echo "[audio] done in $(( $(date +%s) - TS ))s"
+
 
 # ---------- 5. 参照パス書き換え ----------
 echo "=== 5. HTML / CSS 内の参照パスを .webp / .webm へ一括書き換え ==="
