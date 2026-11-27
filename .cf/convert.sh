@@ -2,111 +2,202 @@
 set -e
 
 echo "======変換システムを開始します======"
+
+JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
+echo "並列数: $JOBS"
+
+# ---------- 1. ツール準備（並列DL） ----------
 echo "=== 1. 変換ツールの準備 (ffmpeg / cwebp) ==="
 BIN_DIR="/tmp/bin"
 mkdir -p "$BIN_DIR"
 export PATH="$BIN_DIR:$PATH"
-
 ARCH=$(uname -m)
 
-# ffmpeg (GitHub BtbN 静的ビルド)
-if ! command -v ffmpeg >/dev/null 2>&1; then
-  echo "Downloading static ffmpeg ($ARCH)..."
+fetch_ffmpeg() {
+  command -v ffmpeg >/dev/null 2>&1 && return 0
+  echo "[ffmpeg] downloading ($ARCH)..."
+  local url
   if [ "$ARCH" = "aarch64" ]; then
-    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz"
+    url="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz"
   else
-    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+    url="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
   fi
-  curl -fSL "$FFMPEG_URL" | tar -xJ -C "$BIN_DIR" --strip-components=2 --wildcards '*/bin/ffmpeg'
-fi
+  curl -fSL "$url" | tar -xJ -C "$BIN_DIR" --strip-components=2 --wildcards '*/bin/ffmpeg'
+}
 
-# cwebp (Google公式 libwebp)
-if ! command -v cwebp >/dev/null 2>&1; then
-  echo "Downloading static cwebp ($ARCH)..."
+fetch_webp() {
+  command -v cwebp >/dev/null 2>&1 && return 0
+  echo "[webp] downloading ($ARCH)..."
+  local url
   if [ "$ARCH" = "aarch64" ]; then
-    WEBP_URL="https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.4.0-linux-aarch64.tar.gz"
+    url="https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.4.0-linux-aarch64.tar.gz"
   else
-    WEBP_URL="https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.4.0-linux-x86-64.tar.gz"
+    url="https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.4.0-linux-x86-64.tar.gz"
   fi
-  curl -fSL "$WEBP_URL" | tar -xz -C "$BIN_DIR" --strip-components=2 --wildcards '*/bin/cwebp'
-fi
+  # gif2webp 同梱版を試す
+  curl -fSL "$url" | tar -xz -C "$BIN_DIR" --strip-components=2 \
+    --wildcards '*/bin/cwebp' '*/bin/gif2webp' 2>/dev/null \
+  || curl -fSL "$url" | tar -xz -C "$BIN_DIR" --strip-components=2 --wildcards '*/bin/cwebp'
+}
 
+fetch_ffmpeg & P1=$!
+fetch_webp   & P2=$!
+wait $P1; wait $P2
+
+HAS_GIF2WEBP=0
+command -v gif2webp >/dev/null 2>&1 && HAS_GIF2WEBP=1
+export HAS_GIF2WEBP
+echo "gif2webp: $([ "$HAS_GIF2WEBP" = 1 ] && echo 'あり(高速)' || echo 'なし→ffmpegフォールバック')"
+
+# ---------- 2. Shift_JIS → UTF-8 ----------
 echo "=== 2. HTMLの Shift_JIS -> UTF-8 変換 ==="
-find mirror -type f \( -iname "*.htm" -o -iname "*.html" \) | while IFS= read -r file; do
-  if grep -qi 'charset=Shift_JIS' "$file"; then
+do_sjis() {
+  local file="$1"
+  if grep -qi "charset=Shift_JIS" "$file"; then
     iconv -f CP932 -t UTF-8 "$file" \
       | sed -E 's/<meta[^>]*charset=["'\'']?Shift_JIS["'\'']?[^>]*>//gi' \
-      > "${file}.tmp"
-    mv "${file}.tmp" "$file"
+      > "${file}.tmp" && mv "${file}.tmp" "$file"
   fi
-done
+}
+export -f do_sjis
+find mirror -type f \( -iname "*.htm" -o -iname "*.html" \) -print0 \
+  | xargs -0 -r -P "$JOBS" -n 1 bash -c 'do_sjis "$1"' _
 
+# ---------- 3. 画像 → WebP ----------
 echo "=== 3. 画像の WebP 変換 ==="
-find mirror -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" \) | while IFS= read -r img; do
-  if [[ "${img,,}" == *.gif ]]; then
-    ffmpeg -nostdin -loglevel error -i "$img" \
-      -c:v libwebp -lossless 0 -q:v 80 -loop 0 "${img}.webp"
+do_img() {
+  local img="$1"
+  local lower="${img,,}"
+  local ok=0
 
-elif [[ "${img,,}" == *.jpg || "${img,,}" == *.jpeg ]]; then
-  tmp_png="${img}.tmp.png"
+  case "$lower" in
+    *.gif)
+      if [ "${HAS_GIF2WEBP:-0}" = "1" ]; then
+        gif2webp -quiet -q 80 "$img" -o "${img}.webp" 2>/dev/null && ok=1
+      fi
+      if [ "$ok" = 0 ]; then
+        ffmpeg -nostdin -loglevel error -i "$img" \
+          -c:v libwebp -lossless 0 -q:v 80 -loop 0 "${img}.webp" 2>/dev/null && ok=1
+      fi
+      ;;
 
-  ffmpeg -nostdin -loglevel error -y -i "$img" \
-    -frames:v 1 -pix_fmt rgb24 "$tmp_png"
+    *.jpg|*.jpeg)
+      # 1st try: cwebp 直接（RGB JPEG はこれで最速）
+      if cwebp -quiet -q 85 "$img" -o "${img}.webp" 2>/dev/null; then
+        ok=1
+      else
+        # CMYK / YCCK / 特殊色空間の JPEG は ffmpeg で RGB 化してから cwebp
+        echo "[fallback:ffmpeg] $img"
+        local tmp_png="${img}.tmp.png"
+        if ffmpeg -nostdin -loglevel error -y -i "$img" \
+             -frames:v 1 -pix_fmt rgb24 "$tmp_png" 2>/dev/null \
+           && cwebp -quiet -q 85 "$tmp_png" -o "${img}.webp" 2>/dev/null; then
+          ok=1
+        fi
+        rm -f "$tmp_png"
+      fi
+      ;;
 
-  cwebp -quiet -q 85 "$tmp_png" -o "${img}.webp"
-  rm -f "$tmp_png"
+    *)
+      # PNG はそのまま cwebp（iCCP 警告は 2>/dev/null で抑制）
+      cwebp -quiet -q 85 "$img" -o "${img}.webp" 2>/dev/null && ok=1
+      ;;
+  esac
 
+  if [ "$ok" = 1 ]; then
+    rm -f "$img"
   else
-    cwebp -quiet -q 85 "$img" -o "${img}.webp"
+    echo "[WARN] 変換失敗、元ファイル保持: $img" >&2
+    # ★重要★ exit 255 で xargs 全体が abort するのを防ぐため必ず 0 を返す
   fi
+  return 0
+}
+export -f do_img
+find mirror -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" \) -print0 \
+  | xargs -0 -r -P "$JOBS" -n 1 bash -c 'do_img "$1"' _
 
-  rm -f "$img"
-done
-
+  
+# ---------- 4. 音声 → WebM ----------
 echo "=== 4. 音声 (WAV / MP3) の WebM (Opus) 変換 ==="
-find mirror -type f \( -iname "*.wav" -o -iname "*.mp3" \) | while IFS= read -r audio; do
-  ffmpeg -nostdin -loglevel error -i "$audio" -c:a libopus -b:a 96k -vn "${audio}.webm"
-  rm -f "$audio"
-done
 
+# 音声専用の並列数（未指定なら nproc の2倍。ただし上限8）
+NPROC="$(nproc 2>/dev/null || echo 4)"
+JOBS_AUDIO="${JOBS_AUDIO:-$(( NPROC * 2 > 8 ? 8 : NPROC * 2 ))}"
+
+# 変換設定（品質を下げたくなければ 96k / compression_level 10 のまま）
+OPUS_BITRATE="${OPUS_BITRATE:-96k}"
+OPUS_LEVEL="${OPUS_LEVEL:-10}"   # 0(速い)〜10(高圧縮・遅い)
+
+AUDIO_COUNT=$(find mirror -type f \( -iname "*.wav" -o -iname "*.mp3" \) | wc -l)
+echo "[audio] files=$AUDIO_COUNT, jobs=$JOBS_AUDIO, bitrate=$OPUS_BITRATE, level=$OPUS_LEVEL"
+
+do_audio() {
+  local audio="$1"
+  if ffmpeg -nostdin -loglevel error -y -i "$audio" \
+       -c:a libopus -b:a "$OPUS_BITRATE" -compression_level "$OPUS_LEVEL" \
+       -vn "${audio}.webm" 2>/dev/null; then
+    rm -f "$audio"
+  else
+    echo "[WARN] audio conversion failed, keeping source: $audio" >&2
+    rm -f "${audio}.webm"   # 中途半端な出力は消す
+  fi
+  return 0   # ★ exit 255 で xargs 全体を abort させない
+}
+export -f do_audio
+export OPUS_BITRATE OPUS_LEVEL
+
+# ★ 大きいファイルから先に処理する（最後に1個巨大ファイルが残るのを防ぐ）
+TS=$(date +%s)
+find mirror -type f \( -iname "*.wav" -o -iname "*.mp3" \) -printf '%s\t%p\0' \
+  | sort -z -rn \
+  | cut -z -f2- \
+  | xargs -0 -r -P "$JOBS_AUDIO" -n 1 bash -c 'do_audio "$1"' _
+echo "[audio] done in $(( $(date +%s) - TS ))s"
+
+
+# ---------- 5. 参照パス書き換え ----------
 echo "=== 5. HTML / CSS 内の参照パスを .webp / .webm へ一括書き換え ==="
-find mirror -type f \( -iname "*.htm" -o -iname "*.html" -o -iname "*.css" \) | while IFS= read -r doc; do
+do_rewrite() {
+  local doc="$1"
   sed -i -E \
     -e 's/(\.(png|jpg|jpeg|gif))(["'\'' >\)\?])/\1.webp\3/gi' \
     -e 's/(\.(wav|mp3))(["'\'' >\)\?])/\1.webm\3/gi' \
     "$doc"
-done
+}
+export -f do_rewrite
+find mirror -type f \( -iname "*.htm" -o -iname "*.html" -o -iname "*.css" \) -print0 \
+  | xargs -0 -r -P "$JOBS" -n 1 bash -c 'do_rewrite "$1"' _
 
 echo "=== 変換完了！ ==="
 
+# ---------- 6. 解析タグ削除 ----------
 echo "======古いアクセス解析・カウンタートラッカーの削除======"
-find mirror -type f \( -iname "*.htm" -o -iname "*.html" \) | while IFS= read -r html; do
+do_strip() {
+  local html="$1"
   perl -0777 -i -pe '
-    # 1. 忍者系・NINJA ANALYZE のコメントブロックを削除（■付きや空白ゆれにも対応）
     s/<!--[\s■]*shinobi ct2\s*-->.*?<!--[\s■]*\/shinobi ct2\s*-->//gis;
     s/<!--[\s■]*shinobi1\s*-->.*?<!--[\s■]*shinobi2\s*-->//gis;
     s/<!--[\s■]*NINJA ANALYZE\s*-->.*?<!--[\s■]*\/NINJA ANALYZE\s*-->//gis;
     s/<!--[\s■]*忍び(?:カウンター|アクセス解析)\s*-->\s*(?:<script\b[^>]*>.*?<\/script>\s*(?:<noscript\b[^>]*>.*?<\/noscript>\s*)?)?//gis;
-
-    # 2. Yahoo!アクセス解析ブロックを削除
     s/<!--[\s■]*Yahoo!アクセス解析\s*-->.*?<\/noscript>//gis;
-
-    # 3. 対象ドメインの <script> と、それに続く <noscript> をまとめて削除（改行・空白ゆれ対応）
     s/<script\b[^>]*\bsrc=["\x27][^"\x27]*(?:zouri\.jp|jakou\.com|yu-yake\.com|shinobi\.jp|yimg\.jp\/images\/analytics)[^"\x27]*["\x27][^>]*>.*?<\/script>(?:\s*<noscript\b[^>]*>.*?<\/noscript>)?//gis;
   ' "$html"
-done
+}
+export -f do_strip
+find mirror -type f \( -iname "*.htm" -o -iname "*.html" \) -print0 \
+  | xargs -0 -r -P "$JOBS" -n 1 bash -c 'do_strip "$1"' _
 
+# ---------- 7. HTTPS 混在修正 ----------
 echo "====== HTTPS混在コンテンツの最小修正 ======"
-find mirror -type f | while IFS= read -r doc; do
-  case "$doc" in
-    *.htm|*.html|*.css)
-      perl -0777 -i -pe '
-        # ミラー対象ドメインはPages内の同じパスを参照する
-        s#https?://(?:www[.])?silver-forest[.]net/#/#gi;
+do_https() {
+  local doc="$1"
+  perl -0777 -i -pe '
+    s#https?://(?:www[.])?silver-forest[.]net/#/#gi;
+    s#http://ext[.]nicovideo[.]jp/thumb/#https://ext.nicovideo.jp/thumb/#gi;
+  ' "$doc"
+}
+export -f do_https
+find mirror -type f \( -iname "*.htm" -o -iname "*.html" -o -iname "*.css" \) -print0 \
+  | xargs -0 -r -P "$JOBS" -n 1 bash -c 'do_https "$1"' _
 
-        # ニコニコ動画の旧HTTP埋め込みURLをHTTPS版へ変更
-        s#http://ext[.]nicovideo[.]jp/thumb/#https://ext.nicovideo.jp/thumb/#gi;
-      ' "$doc"
-      ;;
-  esac
-done
+echo "======すべての変換が完了しました======"
