@@ -51,17 +51,14 @@ echo "gif2webp: $([ "$HAS_GIF2WEBP" = 1 ] && echo 'あり(高速)' || echo 'な�
 
 # ---------- 2. Shift_JIS → UTF-8 ----------
 echo "=== 2. HTMLの Shift_JIS -> UTF-8 変換 ==="
-do_sjis() {
-  local file="$1"
-  if grep -qi "charset=Shift_JIS" "$file"; then
-    iconv -f CP932 -t UTF-8 "$file" \
-      | sed -E 's/<meta[^>]*charset=["'\'']?Shift_JIS["'\'']?[^>]*>//gi' \
-      > "${file}.tmp" && mv "${file}.tmp" "$file"
+find mirror -type f \( -iname "*.htm" -o -iname "*.html" \) | while IFS= read -r file; do
+  # すでに有効なUTF-8でなければ Shift_JIS (CP932) とみなしてUTF-8に変換する
+  if ! iconv -f UTF-8 -t UTF-8 "$file" >/dev/null 2>&1; then
+    iconv -f CP932 -t UTF-8 "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
   fi
-}
-export -f do_sjis
-find mirror -type f \( -iname "*.htm" -o -iname "*.html" \) -print0 \
-  | xargs -0 -r -P "$JOBS" -n 1 bash -c 'do_sjis "$1"' _
+  # メタタグ内の charset 表記があれば UTF-8 に書き換える
+  perl -i -pe 's/charset=(?:Shift_JIS|sjis|x-sjis)/charset=UTF-8/gi' "$file"
+done
 
 # ---------- 3. 画像 → WebP ----------
 echo "=== 3. 画像の WebP 変換 ==="
